@@ -18,91 +18,82 @@ package main
 
 import (
 	"bytes"
-	"errors"
 	"flag"
 	"fmt"
 	"github.com/nacos-group/nacos-sdk-go/clients"
 	"github.com/nacos-group/nacos-sdk-go/common/constant"
 	"github.com/nacos-group/nacos-sdk-go/vo"
 	"github.com/patrickmn/go-cache"
-	"github.com/xen0n/go-workwx"
+	"gopkg.in/yaml.v2"
 	"io"
+	"io/ioutil"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 )
 
-type FileInfo struct {
-	DataId string `json:"dataId"`
-	File   string `json:"file"`
-	Group  string `json:"group"`
-}
-
-type FileList struct {
-	FileArr []FileInfo `json:"fileArr"`
-}
-
 var (
-	help           bool
-	nacosIp        string
-	nacosPort      uint64
-	nacosNamespace string
-	files          string
-	fileList       FileList
-	tCache         *cache.Cache
-	isAlert        bool
-	workWxClient   *workwx.Workwx
-	alertApp       *workwx.WorkwxApp
+	help bool
+	file string
+
+	tCache *cache.Cache
+	cf     Conf
 )
 
 func init() {
-	workWxClient = workwx.New("ww535912ccc9fb5be5")
-	alertApp = workWxClient.WithApp("gk7LUzuLOsf4W3CjLw2B7eXw9iVHWoXNt86_jiYQkVw", 1000123)
 	tCache = cache.New(0, 0)
-	flag.BoolVar(&isAlert, "a", false, "workwx alert. default is close")
+
 	flag.BoolVar(&help, "h", false, "help")
-	flag.StringVar(&nacosIp, "s", "", "nacos server ip")
-	flag.Uint64Var(&nacosPort, "p", 0, "nacos server port")
-	flag.StringVar(&nacosNamespace, "n", "", "nacos namespace")
-	flag.StringVar(&files, "f", "", "listen file list, format:\nDataId&Group&File#DataId&Group&File")
+	flag.StringVar(&file, "f", "", "config file")
+}
+
+type NacosFile struct {
+	DataId string `yaml:"dataId"`
+	Group  string `yaml:"group"`
+	Path   string `yaml:"path"`
+}
+
+type Conf struct {
+	Alert struct {
+		Enabled bool   `yaml:"enabled"`
+		Url     string `yaml:"url"`
+	}
+	Nacos struct {
+		Ip         string      `yaml:"ip"`
+		Port       uint64      `yaml:"port"`
+		Namespace  string      `yaml:"namespace"`
+		NacosFiles []NacosFile `yaml:"nacosFiles"`
+	}
+}
+
+func (c *Conf) getConf(file string) *Conf {
+	confFile, err := ioutil.ReadFile(file)
+	if err != nil {
+		fmt.Println(err.Error())
+		return nil
+	}
+	err = yaml.Unmarshal(confFile, c)
+	if err != nil {
+		fmt.Println(err.Error())
+		return nil
+	}
+	return c
 }
 
 func alertWorkwx(content string) {
-	if !isAlert {
+	if !cf.Alert.Enabled {
 		return
 	}
-	c := workwx.Recipient{
-		PartyIDs: []string{"72"},
-	}
 	hostname, _ := os.Hostname()
-	alertApp.SendTextMessage(&c, hostname+"\n"+content, false)
-}
-
-func parseFilesArg(arg string) error {
-	fileList = FileList{}
-	// 先以#切片
-	f := strings.Split(arg, "#")
-	if len(f) < 1 || len(f[0]) < 1 {
-		return errors.New("args format err.")
+	dataJsonStr := fmt.Sprintf(`{"msgtype": "text", "text": {"content": "%s"}}`, hostname+"\n"+content)
+	resp, err := http.Post(cf.Alert.Url, "application/json", bytes.NewBuffer([]byte(dataJsonStr)))
+	if err != nil {
+		fmt.Println("weworkAlarm request error")
 	}
-	// 循环处理&
-	for i := 0; i < len(f); i++ {
-		fi := strings.Split(f[i], "*")
-		if len(fi) != 3 {
-			return errors.New("args format err.")
-		}
-		fit := FileInfo{
-			DataId: fi[0],
-			File:   fi[2],
-			Group:  fi[1],
-		}
-		fileList.FileArr = append(fileList.FileArr, fit)
-	}
-
-	return nil
+	defer resp.Body.Close()
 }
 
 func checkFileIsExist(filename string) bool {
@@ -180,32 +171,28 @@ func main() {
 		os.Exit(0)
 	}
 
+	_ = cf.getConf(file)
+
 	// 校验参数合法
-	if len(nacosIp) == 0 || len(nacosNamespace) == 0 || nacosPort == 0 || len(files) == 0 {
-		fmt.Printf("arg err. nacosIp=[%s] nacosPort=[%d] nacosNamespace=[%s] files[%s]\n",
-			nacosIp, nacosPort, nacosNamespace, files)
+	if len(cf.Nacos.Ip) == 0 || len(cf.Nacos.Namespace) == 0 || cf.Nacos.Port == 0 || len(cf.Nacos.NacosFiles) == 0 {
+		fmt.Printf("arg err. [%v]\n", cf)
 		os.Exit(0)
 	}
 
-	// 解析监听文件列表参数
-	err := parseFilesArg(files)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(0)
-	}
+	fmt.Println(cf)
 
 	// nacos server 配置
 	sc := []constant.ServerConfig{
 		*constant.NewServerConfig(
-			nacosIp,
-			nacosPort,
+			cf.Nacos.Ip,
+			cf.Nacos.Port,
 			constant.WithScheme("http"),
 			constant.WithContextPath("/nacos")),
 	}
 
 	// nacos 客户端配置
 	cc := constant.ClientConfig{
-		NamespaceId:         nacosNamespace, //namespace id
+		NamespaceId:         cf.Nacos.Namespace, //namespace id
 		TimeoutMs:           5000,
 		NotLoadCacheAtStart: true,
 		LogDir:              "logs",
@@ -228,37 +215,37 @@ func main() {
 	}
 
 	// 先拉取监听的配置文件
-	for i := 0; i < len(fileList.FileArr); i++ {
+	for i := 0; i < len(cf.Nacos.NacosFiles); i++ {
 		file, err := client.GetConfig(vo.ConfigParam{
-			DataId: fileList.FileArr[i].DataId,
-			Group:  fileList.FileArr[i].Group,
+			DataId: cf.Nacos.NacosFiles[i].DataId,
+			Group:  cf.Nacos.NacosFiles[i].Group,
 		})
 		if err != nil {
 			fmt.Printf("get config file err[%v]\n", err)
 			os.Exit(0)
 		}
-		err = renewFile(fileList.FileArr[i].File, file)
+		err = renewFile(cf.Nacos.NacosFiles[i].Path, file)
 		if err != nil {
 			fmt.Printf("renew config file err[%v]\n", err)
 			os.Exit(0)
 		}
 	}
 
-	// 缓存监听文件信息
-	tCache.Set("fileList", fileList, cache.NoExpiration)
+	// 缓存监听文件信息，在回调中使用
+	tCache.Set("config", cf, cache.NoExpiration)
 
 	// 监听配置文件变更
-	for i := 0; i < len(fileList.FileArr); i++ {
+	for i := 0; i < len(cf.Nacos.NacosFiles); i++ {
 		err = client.ListenConfig(vo.ConfigParam{
-			DataId: fileList.FileArr[i].DataId,
-			Group:  fileList.FileArr[i].Group,
+			DataId: cf.Nacos.NacosFiles[i].DataId,
+			Group:  cf.Nacos.NacosFiles[i].Group,
 			OnChange: func(namespace, group, dataId, data string) {
-				d, found := tCache.Get("fileList")
+				d, found := tCache.Get("config")
 				if found {
-					fileList := d.(FileList)
-					for i := 0; i < len(fileList.FileArr); i++ {
-						if dataId == fileList.FileArr[i].DataId {
-							filename := fileList.FileArr[i].File
+					cf := d.(Conf)
+					for i := 0; i < len(cf.Nacos.NacosFiles); i++ {
+						if dataId == cf.Nacos.NacosFiles[i].DataId {
+							filename := cf.Nacos.NacosFiles[i].Path
 							err = renewFile(filename, data)
 							if err != nil {
 								fmt.Println("renew file " + filename + "failed.")
@@ -275,4 +262,5 @@ func main() {
 	for {
 		time.Sleep(time.Second)
 	}
+
 }
