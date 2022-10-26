@@ -197,8 +197,6 @@ func main() {
 		NotLoadCacheAtStart: true,
 		LogDir:              "logs",
 		CacheDir:            "cache",
-		RotateTime:          "1h",
-		MaxAge:              3,
 		LogLevel:            "error",
 	}
 

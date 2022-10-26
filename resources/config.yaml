@@ -1,0 +1,16 @@
+alert:
+  enabled: true
+  url: https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx
+nacos:
+  ip: "0.0.0.0"
+  port: 8848
+  namespace: 1-1-1-1
+  nacosFiles:
+    -
+      dataId: "available.conf"
+      group: "DEFAULT_GROUP"
+      path: "/etc/nginx/conf.d/available.conf"
+    -
+      dataId: "nginx.conf"
+      group: "DEFAULT_GROUP"
+      path: "/etc/nginx/nginx.conf"
