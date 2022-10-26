@@ -9,3 +9,7 @@ nginx的配置文件管理，一直想找一个集中管理配置并自动重启
 1. 监听指定的nacos配置文件，有变更则自动替换本地配置
 2. 配置变更后先执行nginx -t测试配置文件正确性，然后nginx -s reload
 3. 如果配置不正确，则发出企业微信告警
+
+### k8s集成
+1. 新建configmap配置nacos工具的配置文件
+2. 建议和sophos/nginx-vts-exporter的vts镜像配合使用

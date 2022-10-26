@@ -10,6 +10,8 @@ entrypoint_log() {
         echo "$@"
     fi
 }
+# waiting for pull nacos config
+sleep 5
 
 if [ "$1" = "nginx" -o "$1" = "nginx-debug" ]; then
     if /usr/bin/find "/docker-entrypoint.d/" -mindepth 1 -maxdepth 1 -type f -print -quit 2>/dev/null | read v; then
