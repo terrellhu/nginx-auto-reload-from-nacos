@@ -3,7 +3,7 @@
 
 set -e
 
-/nginx_nacos_listener/bin/NginxNacosListener -f /nginx_nacos_listener/conf/config.yaml
+/nginx_nacos_listener/bin/NginxNacosListener -f /nginx_nacos_listener/conf/config.yaml &
 
 entrypoint_log() {
     if [ -z "${NGINX_ENTRYPOINT_QUIET_LOGS:-}" ]; then
